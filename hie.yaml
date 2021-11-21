@@ -1,0 +1,6 @@
+cradle:
+  cabal:
+    - path: "./src"
+      component: "lib:buy-sell"
+    - path: "./app/buy-sell.hs"
+      component: "exe:plutus-buysell"
