@@ -42,18 +42,18 @@ import           Text.Printf
 import           Cardano.Api ( ToJSON , FromJSON )
 
 minUtxo :: Integer
-minUtxo = 1000000 -- Hard code the min UTxO parameter to calculate fees
+minUtxo = 1000000
 
 ownerFees :: Integer
 ownerFees = 25000
 
 data BuySellParams = BuySellParams
   {
-    bsOwner         :: !PubKeyHash -- Marketplace, the one receiving the fees
-  , bsRoyalties     :: !Integer    -- Royalties for the collection owner
-  , bsRoyaltiesAddr :: !PubKeyHash -- The address receiving royalties
-  , bsAsset         :: !AssetClass -- Asset to sell
-  , bsSeller        :: !PubKeyHash -- Seller
+    bsOwner         :: !PubKeyHash
+  , bsRoyalties     :: !Integer
+  , bsRoyaltiesAddr :: !PubKeyHash
+  , bsAsset         :: !AssetClass
+  , bsSeller        :: !PubKeyHash
   } deriving Show
 
 PlutusTx.makeIsDataIndexed ''BuySellParams [('BuySellParams, 0)]
@@ -69,7 +69,7 @@ data BuySellAction =
 PlutusTx.makeIsDataIndexed ''BuySellAction [ ('Buy,       0)
                                            , ('EditPrice, 1)
                                            , ('Cancel,    2)
-                                           ]
+                                        ]
 PlutusTx.makeLift ''BuySellAction
 
 {-# INLINABLE bsDatum #-}
@@ -93,16 +93,30 @@ mkBuySellValidator params price action ctx =
   case action of
     EditPrice   ->  traceIfFalse "must be signed by seller" (txSignedBy info $ bsSeller params) &&
                     traceIfFalse "token missing from output" outputHasToken                     &&
-                    traceIfFalse "wrong output datum" correctOutputDatum
+                    traceIfFalse "wrong output datum" correctOutputDatum                        &&
+                    traceIfFalse "only one script input is allowed" onlyOneScriptInput       
 
     Cancel      ->  traceIfFalse "must be signed by seller" (txSignedBy info $ bsSeller params) &&
                     traceIfFalse "token must go back to seller" nftToSeller
 
-    Buy         ->  traceIfFalse "incorrect split" correctSplit
+    Buy         ->  traceIfFalse "incorrect split" correctSplit                                 &&
+                    traceIfFalse "only one script input is allowed" onlyOneScriptInput
 
   where
     info :: TxInfo
     info = scriptContextTxInfo ctx
+
+    onlyOneScriptInput :: Bool 
+    onlyOneScriptInput =
+      let
+        isScriptInput i = case (txOutDatumHash . txInInfoResolved) i of
+          Nothing -> False
+          Just _ -> True
+        xs = [i | i <- txInfoInputs info, isScriptInput i]
+      in
+        case xs of
+            [i] -> True 
+            _   -> False
 
     ownOutput :: TxOut
     ownOutput = case getContinuingOutputs ctx of
@@ -123,8 +137,7 @@ mkBuySellValidator params price action ctx =
     outputHasToken = assetClassValueOf (txOutValue ownOutput) (bsAsset params) == 1
 
     correctOutputDatum :: Bool
-    correctOutputDatum = outputDatum > 0 -- price is higher than 0
-    -- No real need to include this, but left for future modification
+    correctOutputDatum = outputDatum > 0 -- price is higher than 0. 99% sure you don't need it, but just in case
 
     getsAtLeast :: PubKeyHash -> Integer -> Bool
     getsAtLeast h x = Ada.fromValue (valuePaidTo info h) >= Ada.lovelaceOf x
@@ -163,6 +176,7 @@ mkBuySellValidator params price action ctx =
     correctSplit =
       let
         x = fees ownerFees
+        -- don't expect royalties if the creator == seller
         royalties = if thereAreRoyalties then fees (bsRoyalties params) else 0
         rest = price - (x + royalties)
       in
@@ -207,6 +221,7 @@ serialized p = serialise $ scrAddress p
 hex :: BuySellParams -> String
 hex p = (concatMap (printf "%02x") . LB.unpack) $ serialized p 
 
+-- As short ByteString
 buySellScriptAsShortBS :: BuySellParams -> SBS.ShortByteString
 buySellScriptAsShortBS = SBS.toShort . LB.toStrict . serialise .buySellScript
 
